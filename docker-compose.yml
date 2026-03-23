@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: screenShare-server/Dockerfile
+    ports:
+      - "3000:3000"
+      - "40000-40100:40000-40100/udp"
+      - "40000-40100:40000-40100/tcp"
+    environment:
+      - PORT=3000
+      - CLIENT_URL=http://localhost:5173
+      - LISTEN_IP=0.0.0.0
+      - ANNOUNCED_IP=127.0.0.1
+      - MEDIASOUP_MIN_PORT=40000
+      - MEDIASOUP_MAX_PORT=40100
+    network_mode: "host"
+
+  client:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: sh -c "cd screenShare-client && npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_SERVER_URL=http://localhost:3000
+    network_mode: "host"
+
+  coturn:
+    image: coturn/coturn
+    network_mode: "host"
+    command: >
+      -n
+      --log-file=stdout
+      --min-port=49000
+      --max-port=50000
+      --realm=localhost
+      --user=user:password
+      --lt-cred-mech
