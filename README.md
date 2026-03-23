@@ -1,6 +1,6 @@
-# Screen Share App (Google Meet Clone)
+# Screen Share App
 
-A production-grade, low-latency WebRTC meeting application with an SFU architecture and live ephemeral room messaging. It acts as a Google Meet clone where all users are participants capable of sharing their webcams, microphones, and screens simultaneously.
+A production-grade, low-latency WebRTC meeting application with an SFU architecture and live ephemeral room messaging. It acts as a screen share application where all users are participants capable of sharing their webcams, microphones, and screens simultaneously.
 
 ## New Monorepo Layout
 
@@ -19,7 +19,7 @@ screen-share-app/
 ## Core Features (Many-To-Many Architecture)
 - **Unified Meeting Room:** Anyone can be a participant, share their camera, microphone, and screen simultaneously.
 - **Dynamic Grid Layout:** Participants are displayed in an expanding grid view.
-- **Google Meet Controls:** Mute Mic, Stop Camera, Share Screen, Chat, leave meeting.
+- **Controls:** Mute Mic, Stop Camera, Share Screen, Chat, leave meeting.
 - **Participant State:** Accurately track number of participants and their states.
 
 ## Apps
