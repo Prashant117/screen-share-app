@@ -88,7 +88,7 @@ export function Home() {
       <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-8 shadow-2xl">
         <div className="flex items-center justify-center mb-8">
           <Monitor className="text-blue-500 w-10 h-10 mr-3" />
-          <h1 className="text-3xl font-bold text-white tracking-tight">ScreenShare</h1>
+          <h1 className="text-3xl font-bold text-white tracking-tight">Aiken Meet</h1>
         </div>
 
         {error && (
@@ -107,7 +107,7 @@ export function Home() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-              placeholder="e.g. John Doe"
+              placeholder="e.g. Dr. XYZ"
             />
           </div>
 

@@ -88,7 +88,7 @@ export class Room {
     await transport.connect({ dtlsParameters });
   }
 
-  async produce(socketId: string, transportId: string, rtpParameters: any, kind: any) {
+  async produce(socketId: string, transportId: string, rtpParameters: any, kind: any, appData: any = {}) {
     const peer = this.getPeer(socketId);
     if (!peer) return;
 
@@ -97,7 +97,8 @@ export class Room {
 
     const producer = await transport.produce({
       kind,
-      rtpParameters
+      rtpParameters,
+      appData
     });
 
     peer.addProducer(producer);

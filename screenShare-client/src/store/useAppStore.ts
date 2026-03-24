@@ -52,8 +52,17 @@ export const useAppStore = create<AppState>((set) => ({
   setRoomInfo: (info) => set({ roomInfo: info }),
 
   peers: [],
-  setPeers: (peers) => set({ peers }),
-  addPeer: (peer) => set((state) => ({ peers: [...state.peers, peer] })),
+  setPeers: (peers) => set(() => {
+    const map: Record<string, PeerInfo> = {};
+    for (const p of peers) map[p.socketId] = p;
+    return { peers: Object.values(map) };
+  }),
+  addPeer: (peer) => set((state) => {
+    const exists = state.peers.find(p => p.socketId === peer.socketId);
+    return exists
+      ? { peers: state.peers.map(p => (p.socketId === peer.socketId ? { ...p, ...peer } : p)) }
+      : { peers: [...state.peers, peer] };
+  }),
   removePeer: (socketId) => set((state) => ({ peers: state.peers.filter(p => p.socketId !== socketId) })),
 
   messages: [],

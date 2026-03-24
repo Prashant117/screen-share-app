@@ -1,85 +1,133 @@
 # Screen Share App
 
-A production-grade, low-latency WebRTC meeting application with an SFU architecture and live ephemeral room messaging. It acts as a screen share application where all users are participants capable of sharing their webcams, microphones, and screens simultaneously.
+A production-minded low-latency screen sharing application built with **React**, **Node.js**, **WebRTC**, **mediasoup**, and **Socket.IO**.
 
-## New Monorepo Layout
+The platform supports:
+- one-to-many screen sharing
+- multiple rooms
+- multiple concurrent users
+- optional audio sharing
+- live ephemeral room messaging
+- low-latency media delivery over WebRTC
+- scalable SFU-based architecture
 
-screen-share-app/
-- screenShare-client/
-- screenShare-server/
-- docker-compose.yml
-- README.md
-- package.json
+This project is designed as a serious MVP, not a toy demo.
 
-## Why the Split?
-- Clear separation of concerns and independent deployability.
-- Easier local development with independent `dev` servers.
-- Keeps browser-only code out of the server and vice versa.
+---
 
-## Core Features (Many-To-Many Architecture)
-- **Unified Meeting Room:** Anyone can be a participant, share their camera, microphone, and screen simultaneously.
-- **Dynamic Grid Layout:** Participants are displayed in an expanding grid view.
-- **Controls:** Mute Mic, Stop Camera, Share Screen, Chat, leave meeting.
-- **Participant State:** Accurately track number of participants and their states.
+## Features
 
-## Apps
+### Core
+- Create room
+- Join room as broadcaster or viewer
+- Share screen with remote participants
+- Multiple viewers in the same room
+- Multiple active rooms at the same time
+- Viewer count updates
+- Broadcaster start/stop controls
+- Realtime connection state updates
 
-### screenShare-client (React + Vite + Tailwind + Zustand)
-- Pages: Home, MeetingRoom (Unified multi-participant grid)
-- WebRTC client flow: create transports, produce/consume tracks (video, audio, screen) with mediasoup-client
-- Ephemeral live chat via Socket.IO
-- Env: `.env.example` with `VITE_SERVER_URL` / `VITE_SOCKET_URL`
-- Start:
-  ```bash
-  cd screenShare-client
-  npm install
-  npm run dev
-  ```
+### Media
+- Screen sharing using `getDisplayMedia()`
+- WebRTC media transport
+- SFU architecture using **mediasoup**
+- UDP-based delivery through WebRTC where possible
+- TURN/STUN support for NAT traversal
 
-### screenShare-server (Node.js + Express + Socket.IO + mediasoup)
-- SFU: mediasoup workers/routers/transports supporting many-to-many forwarding.
-- Room and peer management, lifecycle and cleanup. Any participant joining creates a new Peer capable of producing & consuming.
-- Signaling and ephemeral chat fanout via Socket.IO.
-- Health endpoint: GET /health
-- Env: `.env.example` with `PORT`, `CLIENT_URL`, `LISTEN_IP`, `ANNOUNCED_IP`, and mediasoup port range
-- Start (dev):
-  ```bash
-  cd screenShare-server
-  npm install
-  npm run dev
-  ```
+### Live Messaging
+- Room-based live chat
+- Ephemeral messages only
+- No DB storage
+- No replay to late joiners
+- Messages vanish on disconnect / session end
+- System messages for join, leave, start share, stop share
 
-## Root Scripts
-From `screen-share-app` root:
-```bash
-npm run install:all   # installs in both apps
-npm run dev           # runs client and server concurrently (shell background)
-npm run dev:client    # client only
-npm run dev:server    # server only
-npm run build         # builds both
-```
+### Reliability / Engineering
+- Clean frontend/backend separation
+- Environment-based config
+- Socket event contract
+- Health endpoint
+- Graceful cleanup on disconnect
+- Docker-based local setup support
 
-## Docker Compose
-`docker-compose.yml` includes:
-- screenShare-server (Node/mediasoup)
-- coturn for TURN/STUN
-- optional client dev service
+---
 
-Start:
-```bash
-docker-compose up -d
-```
+## Tech Stack
 
-## Latency Notes
-- Uses WebRTC over UDP (where possible) and SFU routing for low latency.
-- Real-world latency varies by network, CPU, TURN relaying, and geography.
+### Frontend
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- Zustand
+- React Router
+- Socket.IO client
+- mediasoup-client
+- WebRTC browser APIs
 
-## Security & Robustness
-- Input validation on socket events and messages (trim, length)
-- Basic per-socket rate-limit for chat
-- CORS configurable via `CLIENT_URL`
-- Messages are ephemeral: no persistence, no replay
+### Backend
+- Node.js
+- Express
+- TypeScript
+- Socket.IO
+- mediasoup
+- UUID
 
-## Scaling Notes
-- mediasoup SFU supports adding more workers/routers
-- Add simulcast/SVC and bitrate controls for mixed network conditions
+### Infra
+- coturn
+- Docker Compose
+
+---
+
+## Architecture
+
+## Why this architecture
+
+This application uses an **SFU (Selective Forwarding Unit)** architecture instead of peer-to-peer mesh.
+
+### Why not mesh
+Mesh does not scale well for one-to-many screen sharing:
+- broadcaster uploads separate streams to each viewer
+- CPU and bandwidth usage grows fast
+- performance degrades quickly as users increase
+
+### Why SFU
+With SFU:
+- broadcaster sends one upstream media stream
+- server forwards media to multiple viewers
+- lower sender bandwidth
+- better scalability for multi-user rooms
+- cleaner control over rooms, peers, and stream lifecycle
+
+### Why mediasoup
+`mediasoup` was chosen because it gives:
+- strong control over WebRTC transport lifecycle
+- scalable SFU behavior
+- production-grade media routing
+- Node.js integration
+- flexibility for custom room and signaling logic
+
+---
+
+## High-Level Architecture
+
+```text
++-------------------+         Socket.IO Signaling         +----------------------+
+|   React Client    |  <--------------------------------> |   Node.js Server     |
+|                   |                                      |  Express + Socket.IO |
+| - Home / Join UI  |                                      | - Room Manager       |
+| - Broadcaster UI  |                                      | - Peer Manager       |
+| - Viewer UI       |                                      | - mediasoup Worker   |
+| - Chat Panel      |                                      | - mediasoup Router   |
+| - mediasoup-client|                                      | - Transport Handling |
++---------+---------+                                      +----------+-----------+
+          |                                                           |
+          |                 WebRTC Media Transport                     |
+          +-----------------------------------------------------------+
+                                  via mediasoup SFU
+                                           |
+                                           v
+                                     +-----------+
+                                     |  coturn   |
+                                     | STUN/TURN |
+                                     +-----------+

@@ -11,11 +11,27 @@ const consumers = new Map<string, any>(); // key: consumer.id
 
 export const webrtcService = {
   getDevice: () => device,
+
+  getProducer: (customKind: 'video' | 'audio' | 'screen') => {
+    return producers.get(customKind);
+  },
+
+  replaceTrack: async (customKind: 'video' | 'audio' | 'screen', track: MediaStreamTrack | null) => {
+    const producer = producers.get(customKind);
+    if (producer) {
+      await producer.replaceTrack({ track });
+    }
+  },
   
   loadDevice: async (routerRtpCapabilities: any) => {
     device = new Device();
     await device.load({ routerRtpCapabilities });
     return device;
+  },
+
+  setQuality: (q: 'low' | 'medium' | 'high') => {
+    // Placeholder hook for future adaptive bitrate; currently not altering encodings.
+    (webrtcService as any)._quality = q;
   },
 
   createSendTransport: async () => {
@@ -37,11 +53,10 @@ export const webrtcService = {
         });
 
         sendTransport.on('produce', (parameters: any, callback: any, errback: any) => {
-          // The kind we pass here will be routed accurately, but we also can pass appData to identify screen vs video
-          const kind = parameters.appData.customKind || parameters.kind;
           socket.emit('produce', {
             transportId: sendTransport.id,
-            kind: kind,
+            kind: parameters.kind,
+            appData: parameters.appData,
             rtpParameters: parameters.rtpParameters,
           }, (response: any) => {
             if (response.error) errback(response.error);
@@ -125,10 +140,12 @@ export const webrtcService = {
   stopProduce: (customKind: 'video' | 'audio' | 'screen') => {
     const producer = producers.get(customKind);
     if (producer) {
+      const producerId = producer.id;
       producer.close();
       producers.delete(customKind);
-      // We could ideally emit a stop via socket, but mediasoup peer close cleans it up
-      // In this system, we can just rely on the server logic or emit an event
+      
+      socket.emit('closeProducer', { producerId }, () => {});
+      
       if (customKind === 'screen') {
         socket.emit('stopScreenShare', {}, () => {});
       }

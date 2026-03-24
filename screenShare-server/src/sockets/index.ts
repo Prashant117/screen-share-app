@@ -43,10 +43,12 @@ export function setupSockets(io: Server) {
         socket.join(roomId);
         currentRoomId = roomId;
 
-        const peersInfo = room.getPeers().map(p => ({
-          socketId: p.socketId,
-          displayName: p.displayName
-        }));
+        const peersInfo = room.getPeers()
+          .filter(p => p.socketId !== socket.id)
+          .map(p => ({
+            socketId: p.socketId,
+            displayName: p.displayName
+          }));
         
         callback({
           room: {
@@ -114,7 +116,9 @@ export function setupSockets(io: Server) {
       }
     });
 
-    socket.on('produce', async ({ transportId, kind, rtpParameters }, callback) => {
+    // (removed duplicate getProducers handler; see unified implementation further below)
+
+    socket.on('produce', async ({ transportId, kind, rtpParameters, appData }, callback) => {
       try {
         if (!currentRoomId) throw new Error('Not in a room');
         const room = roomManager.getRoom(currentRoomId);
@@ -125,18 +129,61 @@ export function setupSockets(io: Server) {
           return callback({ error: 'Peer not found' });
         }
 
-        const producerId = await room.produce(socket.id, transportId, rtpParameters, kind);
+        const producerId = await room.produce(socket.id, transportId, rtpParameters, kind, appData);
         
         callback({ id: producerId });
 
         socket.to(currentRoomId).emit('newProducer', {
           producerId,
           socketId: socket.id,
-          kind
+          kind: appData?.customKind || kind
         });
 
       } catch (err: any) {
         callback({ error: err.message });
+      }
+    });
+
+    socket.on('getProducers', (callback) => {
+      try {
+        if (!currentRoomId) return callback([]);
+        const room = roomManager.getRoom(currentRoomId);
+        if (!room) return callback([]);
+
+        const producers: any[] = [];
+        room.getPeers().forEach(peer => {
+          if (peer.socketId === socket.id) return;
+          peer.producers.forEach(producer => {
+            producers.push({
+              producerId: producer.id,
+              socketId: peer.socketId,
+              kind: producer.appData?.customKind || producer.kind
+            });
+          });
+        });
+        callback(producers);
+      } catch (err) {
+        callback([]);
+      }
+    });
+
+    socket.on('closeProducer', async ({ producerId }, callback) => {
+      try {
+        if (!currentRoomId) throw new Error('Not in a room');
+        const room = roomManager.getRoom(currentRoomId);
+        if (!room) throw new Error('Room not found');
+
+        const peer = room.getPeer(socket.id);
+        if (peer) {
+          const producer = peer.getProducer(producerId);
+          if (producer) {
+            producer.close();
+            peer.producers.delete(producerId);
+          }
+        }
+        if (callback) callback({ success: true });
+      } catch (err: any) {
+        if (callback) callback({ error: err.message });
       }
     });
 
@@ -179,13 +226,10 @@ export function setupSockets(io: Server) {
         const room = roomManager.getRoom(currentRoomId);
         if (!room) throw new Error('Room not found');
 
-        const peer = room.getPeer(socket.id);
-        if (peer) {
-          peer.producers.forEach(p => p.close());
-          peer.producers.clear();
-          
-          socket.to(currentRoomId).emit('producerStopped', { socketId: socket.id });
-        }
+        // This is deprecated, we prefer closeProducer instead. 
+        // We'll leave it as a no-op or only log to avoid closing audio/video.
+        console.log(`stopScreenShare called by ${socket.id}, ignoring to prevent breaking other tracks.`);
+        
         callback({ success: true });
       } catch (err: any) {
         callback({ error: err.message });
@@ -222,6 +266,21 @@ export function setupSockets(io: Server) {
 
       io.to(currentRoomId).emit('roomMessage', message);
       callback({ success: true });
+    });
+
+    socket.on('raiseHand', ({ raised }, callback) => {
+      if (!currentRoomId) return callback && callback({ error: 'Not in a room' });
+      const room = roomManager.getRoom(currentRoomId);
+      if (!room) return callback && callback({ error: 'Room not found' });
+      const peer = room.getPeer(socket.id);
+      if (!peer) return callback && callback({ error: 'Peer not found' });
+      io.to(currentRoomId).emit('handRaised', {
+        socketId: socket.id,
+        displayName: peer.displayName || 'Participant',
+        raised: !!raised,
+        timestamp: Date.now()
+      });
+      callback && callback({ success: true });
     });
 
     socket.on('leaveRoom', (callback) => {
