@@ -8,6 +8,8 @@ let recvTransport: any = null;
 
 const producers = new Map<string, any>(); // key: kind ('video' | 'audio' | 'screen')
 const consumers = new Map<string, any>(); // key: consumer.id
+const consumedProducers = new Set<string>(); // producerId de-dup guard
+const producerToConsumer = new Map<string, string>(); // producerId -> consumerId
 
 export const webrtcService = {
   getDevice: () => device,
@@ -155,6 +157,9 @@ export const webrtcService = {
   consume: async (producerId: string, socketId: string, kind: 'video' | 'audio' | 'screen'): Promise<void> => {
     return new Promise((resolve, reject) => {
       if (!recvTransport) return reject('No recvTransport');
+      if (consumedProducers.has(producerId)) {
+        return resolve(); // already consuming this producer
+      }
       
       socket.emit('consume', {
         transportId: recvTransport.id,
@@ -171,6 +176,8 @@ export const webrtcService = {
         });
 
         consumers.set(consumer.id, consumer);
+        consumedProducers.add(producerId);
+        producerToConsumer.set(producerId, consumer.id);
 
         socket.emit('resumeConsumer', { consumerId: consumer.id }, (res: any) => {
           if (res.error) return reject(res.error);
@@ -179,11 +186,15 @@ export const webrtcService = {
           
           consumer.on('transportclose', () => {
             consumers.delete(consumer.id);
+            consumedProducers.delete(producerId);
+            producerToConsumer.delete(producerId);
             useAppStore.getState().setRemoteStreamTrack(socketId, kind, undefined);
           });
           
           consumer.on('producerclose', () => {
             consumers.delete(consumer.id);
+            consumedProducers.delete(producerId);
+            producerToConsumer.delete(producerId);
             useAppStore.getState().setRemoteStreamTrack(socketId, kind, undefined);
           });
 
@@ -191,6 +202,18 @@ export const webrtcService = {
         });
       });
     });
+  },
+
+  // Allow external handler to proactively clear consumer guard when server notifies closure
+  markProducerClosed: (producerId: string) => {
+    const consumerId = producerToConsumer.get(producerId);
+    if (consumerId) {
+      const c = consumers.get(consumerId);
+      try { c && c.close && c.close(); } catch {}
+      consumers.delete(consumerId);
+      producerToConsumer.delete(producerId);
+    }
+    consumedProducers.delete(producerId);
   },
 
   close: () => {

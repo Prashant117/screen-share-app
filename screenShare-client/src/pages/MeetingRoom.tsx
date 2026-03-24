@@ -63,6 +63,47 @@ const Tile = ({ entry }: { entry: any }) => (
   </div>
 );
 
+const ControlButton = ({ 
+  onClick, 
+  className,
+  title,
+  ariaLabel,
+  children
+}: {
+  onClick: (e: any) => void;
+  className: string;
+  title: string;
+  ariaLabel?: string;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    title={title}
+    aria-label={ariaLabel || title}
+    role="button"
+    tabIndex={0}
+    onMouseDown={(e) => e.stopPropagation()}
+    onTouchStart={(e) => {
+      // Prevents ghost clicks on certain mobile browsers
+      e.stopPropagation();
+    }}
+    onClick={(e) => {
+      e.stopPropagation();
+      onClick(e);
+    }}
+    onKeyDown={(e) => { 
+      if (e.key === 'Enter' || e.key === ' ') { 
+        e.preventDefault(); 
+        e.stopPropagation();
+        onClick(e); 
+      } 
+    }}
+    className={`p-2 sm:p-3 rounded-full transition-colors cursor-pointer focus:outline-none focus:ring-2 select-none shrink-0 ${className}`}
+  >
+    {children}
+  </button>
+);
+
 export function MeetingRoom() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -74,6 +115,12 @@ export function MeetingRoom() {
   const [quality, setQuality] = useState<'low'|'medium'|'high'>('high');
   const [chatInput, setChatInput] = useState('');
   const [toasts, setToasts] = useState<Array<{ id: string; text: string }>>([]);
+  
+  const showToast = (msg: string) => {
+    const idToast = Math.random().toString(36).slice(2);
+    setToasts(prev => [...prev, { id: idToast, text: msg }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== idToast)), 5000);
+  };
   
   const [localDeviceStream, setLocalDeviceStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
@@ -149,25 +196,35 @@ export function MeetingRoom() {
           try {
             const combinedStream = new MediaStream();
             
-            try {
-              const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-              const audioTrack = audioStream.getAudioTracks()[0];
-              if (audioTrack) {
-                combinedStream.addTrack(audioTrack);
-                await webrtcService.produce(audioTrack, 'audio');
-                setLocalStream('audio', true);
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+              showToast("Camera/Mic access requires a secure HTTPS connection or localhost.");
+            } else {
+              try {
+                const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const audioTrack = audioStream.getAudioTracks()[0];
+                if (audioTrack) {
+                  combinedStream.addTrack(audioTrack);
+                  await webrtcService.produce(audioTrack, 'audio');
+                  setLocalStream('audio', true);
+                }
+              } catch (e: any) { 
+                console.warn('Audio not available initially', e); 
+                if (e.name === 'NotAllowedError') showToast('Microphone access denied. Please allow it in browser settings.');
               }
-            } catch (e) { console.warn('Audio not available initially', e); }
 
-            try {
-              const videoStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-              const videoTrack = videoStream.getVideoTracks()[0];
-              if (videoTrack) {
-                combinedStream.addTrack(videoTrack);
-                await webrtcService.produce(videoTrack, 'video');
-                setLocalStream('video', true);
+              try {
+                const videoStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+                const videoTrack = videoStream.getVideoTracks()[0];
+                if (videoTrack) {
+                  combinedStream.addTrack(videoTrack);
+                  await webrtcService.produce(videoTrack, 'video');
+                  setLocalStream('video', true);
+                }
+              } catch (e: any) { 
+                console.warn('Video not available initially', e); 
+                if (e.name === 'NotAllowedError') showToast('Camera access denied. Please allow it in browser settings.');
               }
-            } catch (e) { console.warn('Video not available initially', e); }
+            }
 
             if (combinedStream.getTracks().length > 0) {
               setLocalDeviceStream(combinedStream);
@@ -229,6 +286,9 @@ export function MeetingRoom() {
       if (data && data.socketId && data.kind) {
         useAppStore.getState().setRemoteStreamTrack(data.socketId, data.kind, undefined);
       }
+      if (data?.producerId) {
+        webrtcService.markProducerClosed?.(data.producerId);
+      }
     };
 
     socket.on('participantJoined', onParticipantJoined);
@@ -275,6 +335,9 @@ export function MeetingRoom() {
       setLocalStream('audio', false);
     } else {
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Media devices API not available. This usually requires HTTPS.');
+        }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const audioTrack = stream.getAudioTracks()[0];
         
@@ -292,8 +355,10 @@ export function MeetingRoom() {
           await webrtcService.produce(audioTrack, 'audio');
         }
         setLocalStream('audio', true);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error enabling audio:', err);
+        if (err.name === 'NotAllowedError') showToast('Microphone permission denied. Please allow it in browser settings.');
+        else showToast(err.message || 'Could not access microphone');
       }
     }
   };
@@ -319,6 +384,9 @@ export function MeetingRoom() {
     } else {
       // Turn on video
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Media devices API not available. This usually requires HTTPS.');
+        }
         const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
         const videoTrack = stream.getVideoTracks()[0];
         
@@ -336,8 +404,10 @@ export function MeetingRoom() {
           await webrtcService.produce(videoTrack, 'video');
         }
         setLocalStream('video', true);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error enabling video:', err);
+        if (err.name === 'NotAllowedError') showToast('Camera permission denied. Please allow it in browser settings.');
+        else showToast(err.message || 'Could not access camera');
       }
     }
   };
@@ -350,6 +420,9 @@ export function MeetingRoom() {
       setLocalStream('screen', false);
     } else {
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+          throw new Error('Screen sharing API not available. This usually requires HTTPS.');
+        }
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: { width: 1920, height: 1080 },
           audio: false
@@ -367,8 +440,11 @@ export function MeetingRoom() {
             setLocalStream('screen', false);
           };
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error sharing screen', err);
+        if (err.name !== 'NotAllowedError') {
+          showToast(err.message || 'Could not start screen share');
+        }
       }
     }
   };
@@ -381,7 +457,20 @@ export function MeetingRoom() {
   };
 
   const leaveRoom = () => {
-    navigate('/');
+    try {
+      socket.emit('leaveRoom', () => {
+        try {
+          webrtcService.close();
+          localDeviceStream?.getTracks().forEach(t => t.stop());
+          localScreenStream?.getTracks().forEach(t => t.stop());
+          socket.disconnect();
+        } finally {
+          navigate('/');
+        }
+      });
+    } catch {
+      navigate('/');
+    }
   };
 
   // Build grid blocks
@@ -518,75 +607,92 @@ export function MeetingRoom() {
           )}
         </div>
 
-        {/* Bottom Control Bar */}
-        <div className="h-20 bg-[#202124] flex items-center justify-between px-6 absolute bottom-0 w-full z-20 transition-all duration-300" style={{ right: activeSidebar ? '20rem' : '0' }}>
+        {/* Bottom Control Bar (fixed, always clickable) */}
+        <div
+          className="fixed bottom-0 left-0 right-0 bg-[#202124] flex items-center justify-between px-2 sm:px-6 z-[1000] transition-all duration-300 pointer-events-auto shadow-[0_-10px_40px_rgba(0,0,0,0.5)]"
+          style={{ 
+            paddingRight: activeSidebar ? '20rem' : (window.innerWidth < 640 ? '0.5rem' : '1.5rem'),
+            height: 'calc(5rem + env(safe-area-inset-bottom))',
+            paddingBottom: 'env(safe-area-inset-bottom)'
+          }}
+          role="region"
+          aria-label="In-call controls"
+        >
           
-          <div className="flex items-center space-x-4 w-1/3">
-            <div className="text-lg font-medium">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} | {id}</div>
+          <div className="flex-1 hidden md:flex items-center space-x-4 overflow-hidden">
+            <div className="text-lg font-medium whitespace-nowrap overflow-hidden text-ellipsis text-gray-300">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} | {id}</div>
           </div>
 
-          <div className="flex items-center justify-center space-x-4 w-1/3">
-            <button 
+          <div className="flex-none flex items-center justify-center space-x-2 md:space-x-4 z-10 relative overflow-x-auto overflow-y-hidden scrollbar-hide py-2 max-w-[85%] md:max-w-full">
+            <ControlButton 
               onClick={toggleMic}
-              className={`p-3 rounded-full ${localStreams.audio ? 'bg-[#3c4043] hover:bg-[#4a4f54]' : 'bg-red-500 hover:bg-red-600'} transition-colors`}
+              className={`${localStreams.audio ? 'bg-[#3c4043] hover:bg-[#4a4f54] focus:ring-blue-400' : 'bg-red-500 hover:bg-red-600 focus:ring-red-400'} text-white`}
+              title={localStreams.audio ? "Turn off microphone" : "Turn on microphone"}
             >
-              {localStreams.audio ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-            </button>
-            <button 
+              {localStreams.audio ? <Mic className="w-5 h-5 sm:w-6 sm:h-6" /> : <MicOff className="w-5 h-5 sm:w-6 sm:h-6" />}
+            </ControlButton>
+            <ControlButton 
               onClick={toggleVideo}
-              className={`p-3 rounded-full ${localStreams.video ? 'bg-[#3c4043] hover:bg-[#4a4f54]' : 'bg-red-500 hover:bg-red-600'} transition-colors`}
+              className={`${localStreams.video ? 'bg-[#3c4043] hover:bg-[#4a4f54] focus:ring-blue-400' : 'bg-red-500 hover:bg-red-600 focus:ring-red-400'} text-white`}
+              title={localStreams.video ? "Turn off camera" : "Turn on camera"}
             >
-              {localStreams.video ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
-            </button>
-            <button 
+              {localStreams.video ? <Video className="w-5 h-5 sm:w-6 sm:h-6" /> : <VideoOff className="w-5 h-5 sm:w-6 sm:h-6" />}
+            </ControlButton>
+            <ControlButton 
               onClick={toggleScreenShare}
-              className={`p-3 rounded-full ${localStreams.screen ? 'bg-blue-200 text-blue-800' : 'bg-[#3c4043] hover:bg-[#4a4f54]'} transition-colors`}
+              className={`${localStreams.screen ? 'bg-blue-200 text-blue-800 focus:ring-blue-400' : 'bg-[#3c4043] hover:bg-[#4a4f54] text-white focus:ring-blue-400'}`}
+              title={localStreams.screen ? "Stop presenting" : "Present now"}
             >
-              <MonitorUp className="w-6 h-6" />
-            </button>
-            <button 
+              <MonitorUp className="w-5 h-5 sm:w-6 sm:h-6" />
+            </ControlButton>
+            <ControlButton 
               onClick={() => socket.emit('raiseHand', { raised: true })}
-              className="p-3 rounded-full bg-[#3c4043] hover:bg-[#4a4f54] transition-colors"
+              className="bg-[#3c4043] hover:bg-[#4a4f54] text-white focus:ring-blue-400"
               title="Raise hand"
             >
-              <Hand className="w-6 h-6" />
-            </button>
-            <button
+              <Hand className="w-5 h-5 sm:w-6 sm:h-6" />
+            </ControlButton>
+            <ControlButton
               onClick={() => setViewMode(v => v === 'grid' ? 'speaker' : 'grid')}
-              className="p-3 rounded-full bg-[#3c4043] hover:bg-[#4a4f54] transition-colors"
+              className="bg-[#3c4043] hover:bg-[#4a4f54] text-white focus:ring-blue-400 hidden sm:block"
               title="Toggle view"
             >
-              {viewMode === 'grid' ? <PersonStanding className="w-6 h-6" /> : <LayoutGrid className="w-6 h-6" />}
-            </button>
-            <button
+              {viewMode === 'grid' ? <PersonStanding className="w-5 h-5 sm:w-6 sm:h-6" /> : <LayoutGrid className="w-5 h-5 sm:w-6 sm:h-6" />}
+            </ControlButton>
+            <ControlButton
               onClick={() => {
+                const docEl = document.documentElement as any;
                 if (!isFullscreen) {
-                  document.documentElement.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(()=>{});
+                  const reqFS = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.msRequestFullscreen;
+                  if (reqFS) reqFS.call(docEl).then(() => setIsFullscreen(true)).catch(()=>{});
+                  else alert("Fullscreen is not natively supported on this device.");
                 } else {
-                  document.exitFullscreen?.().then(()=>setIsFullscreen(false)).catch(()=>{});
+                  const exitFS = document.exitFullscreen || (document as any).webkitExitFullscreen || (document as any).msExitFullscreen;
+                  if (exitFS) exitFS.call(document).then(()=>setIsFullscreen(false)).catch(()=>{});
                 }
               }}
-              className="p-3 rounded-full bg-[#3c4043] hover:bg-[#4a4f54] transition-colors"
+              className="bg-[#3c4043] hover:bg-[#4a4f54] text-white focus:ring-blue-400 hidden sm:block"
               title="Toggle fullscreen"
             >
-              {isFullscreen ? <Minimize className="w-6 h-6" /> : <Maximize className="w-6 h-6" />}
-            </button>
-            <button
+              {isFullscreen ? <Minimize className="w-5 h-5 sm:w-6 sm:h-6" /> : <Maximize className="w-5 h-5 sm:w-6 sm:h-6" />}
+            </ControlButton>
+            <ControlButton
               onClick={() => setSettingsOpen(true)}
-              className="p-3 rounded-full bg-[#3c4043] hover:bg-[#4a4f54] transition-colors"
+              className="bg-[#3c4043] hover:bg-[#4a4f54] text-white focus:ring-blue-400"
               title="Settings"
             >
-              <SlidersHorizontal className="w-6 h-6" />
-            </button>
-            <button 
+              <SlidersHorizontal className="w-5 h-5 sm:w-6 sm:h-6" />
+            </ControlButton>
+            <ControlButton 
               onClick={leaveRoom}
-              className="p-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors px-6 ml-4"
+              className="bg-red-500 hover:bg-red-600 focus:ring-red-400 text-white px-5 sm:px-6 ml-1 sm:ml-4"
+              title="Leave call"
             >
-              <PhoneOff className="w-6 h-6" />
-            </button>
+              <PhoneOff className="w-5 h-5 sm:w-6 sm:h-6" />
+            </ControlButton>
           </div>
 
-          <div className="flex items-center justify-end space-x-4 w-1/3">
+          <div className="flex-1 flex items-center justify-end space-x-2 md:space-x-4">
             <button 
               onClick={() => setActiveSidebar(activeSidebar === 'people' ? null : 'people')}
               className={`flex items-center rounded-full px-4 py-2 text-sm font-medium mr-2 transition-colors ${activeSidebar === 'people' ? 'bg-blue-200 text-blue-800' : 'bg-[#3c4043] hover:bg-[#4a4f54]'}`}
