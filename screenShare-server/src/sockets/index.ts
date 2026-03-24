@@ -177,8 +177,15 @@ export function setupSockets(io: Server) {
         if (peer) {
           const producer = peer.getProducer(producerId);
           if (producer) {
+            const kind = (producer.appData?.customKind || producer.kind) as string;
             producer.close();
             peer.producers.delete(producerId);
+            // notify others that this producer is gone so they can clear tiles
+            socket.to(currentRoomId).emit('producerClosed', {
+              socketId: socket.id,
+              producerId,
+              kind
+            });
           }
         }
         if (callback) callback({ success: true });

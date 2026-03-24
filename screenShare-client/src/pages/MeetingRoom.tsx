@@ -73,6 +73,7 @@ export function MeetingRoom() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quality, setQuality] = useState<'low'|'medium'|'high'>('high');
   const [chatInput, setChatInput] = useState('');
+  const [toasts, setToasts] = useState<Array<{ id: string; text: string }>>([]);
   
   const [localDeviceStream, setLocalDeviceStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
@@ -209,14 +210,26 @@ export function MeetingRoom() {
 
     const onRoomMessage = (msg: any) => addMessage(msg);
     const onSystemMessage = (msg: any) => addMessage({ ...msg, type: 'system' });
-    const onHandRaised = (data: any) => addMessage({
-      id: Math.random().toString(36).slice(2),
-      senderId: data.socketId,
-      displayName: data.displayName,
-      content: data.raised ? `${data.displayName} raised hand` : `${data.displayName} lowered hand`,
-      timestamp: data.timestamp,
-      type: 'system'
-    });
+    const onHandRaised = (data: any) => {
+      const text = data.raised ? `${data.displayName || 'Participant'} raised hand` : `${data.displayName || 'Participant'} lowered hand`;
+      addMessage({
+        id: Math.random().toString(36).slice(2),
+        senderId: data.socketId,
+        displayName: data.displayName,
+        content: text,
+        timestamp: data.timestamp,
+        type: 'system'
+      });
+      const idToast = Math.random().toString(36).slice(2);
+      setToasts(prev => [...prev, { id: idToast, text }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== idToast)), 4000);
+    };
+    const onProducerClosed = (data: any) => {
+      // proactively remove the closed producer track
+      if (data && data.socketId && data.kind) {
+        useAppStore.getState().setRemoteStreamTrack(data.socketId, data.kind, undefined);
+      }
+    };
 
     socket.on('participantJoined', onParticipantJoined);
     socket.on('participantLeft', onParticipantLeft);
@@ -225,6 +238,7 @@ export function MeetingRoom() {
     socket.on('roomMessage', onRoomMessage);
     socket.on('systemMessage', onSystemMessage);
     socket.on('handRaised', onHandRaised);
+    socket.on('producerClosed', onProducerClosed);
 
     return () => {
       socket.emit('leaveRoom');
@@ -238,6 +252,7 @@ export function MeetingRoom() {
       socket.off('roomMessage', onRoomMessage);
       socket.off('systemMessage', onSystemMessage);
       socket.off('handRaised', onHandRaised);
+      socket.off('producerClosed', onProducerClosed);
       clearMessages();
     };
   }, []);
@@ -434,6 +449,14 @@ export function MeetingRoom() {
 
   return (
     <div className="h-screen bg-[#202124] flex overflow-hidden text-white font-sans">
+      {/* Toasts */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(t => (
+          <div key={t.id} className="bg-black/80 text-white px-4 py-2 rounded-lg shadow-lg border border-white/10">
+            {t.text}
+          </div>
+        ))}
+      </div>
       
       {/* Invisible Audio Players for remote users */}
       {Object.values(remoteStreams).map((s, i) => s.audio ? <AudioPlayer key={i} track={s.audio} /> : null)}
