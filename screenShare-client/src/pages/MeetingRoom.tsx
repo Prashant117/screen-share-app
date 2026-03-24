@@ -124,6 +124,8 @@ export function MeetingRoom() {
   
   const [localDeviceStream, setLocalDeviceStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const localDeviceStreamRef = useRef<MediaStream | null>(null);
+  const localScreenStreamRef = useRef<MediaStream | null>(null);
 
   const {
     displayName,
@@ -164,6 +166,7 @@ export function MeetingRoom() {
       navigate('/');
       return;
     }
+    let isUnmounted = false;
 
     const init = async () => {
       try {
@@ -202,7 +205,9 @@ export function MeetingRoom() {
               try {
                 const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 const audioTrack = audioStream.getAudioTracks()[0];
-                if (audioTrack) {
+                if (isUnmounted && audioTrack) {
+                  audioTrack.stop();
+                } else if (audioTrack) {
                   combinedStream.addTrack(audioTrack);
                   await webrtcService.produce(audioTrack, 'audio');
                   setLocalStream('audio', true);
@@ -215,7 +220,9 @@ export function MeetingRoom() {
               try {
                 const videoStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
                 const videoTrack = videoStream.getVideoTracks()[0];
-                if (videoTrack) {
+                if (isUnmounted && videoTrack) {
+                  videoTrack.stop();
+                } else if (videoTrack) {
                   combinedStream.addTrack(videoTrack);
                   await webrtcService.produce(videoTrack, 'video');
                   setLocalStream('video', true);
@@ -228,8 +235,11 @@ export function MeetingRoom() {
 
             if (combinedStream.getTracks().length > 0) {
               setLocalDeviceStream(combinedStream);
+              localDeviceStreamRef.current = combinedStream;
             } else {
-              setLocalDeviceStream(new MediaStream());
+              const emptyStream = new MediaStream();
+              setLocalDeviceStream(emptyStream);
+              localDeviceStreamRef.current = emptyStream;
             }
 
           } catch (e) {
@@ -301,8 +311,15 @@ export function MeetingRoom() {
     socket.on('producerClosed', onProducerClosed);
 
     return () => {
+      isUnmounted = true;
       socket.emit('leaveRoom');
       webrtcService.close();
+      if (localDeviceStreamRef.current) {
+        localDeviceStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+      if (localScreenStreamRef.current) {
+        localScreenStreamRef.current.getTracks().forEach(t => t.stop());
+      }
       localDeviceStream?.getTracks().forEach(t => t.stop());
       localScreenStream?.getTracks().forEach(t => t.stop());
       socket.off('participantJoined', onParticipantJoined);
@@ -314,16 +331,18 @@ export function MeetingRoom() {
       socket.off('handRaised', onHandRaised);
       socket.off('producerClosed', onProducerClosed);
       clearMessages();
+      if (localDeviceStreamRef.current) localDeviceStreamRef.current.getTracks().forEach(t => t.stop());
+      if (localScreenStreamRef.current) localScreenStreamRef.current.getTracks().forEach(t => t.stop());
     };
   }, []);
 
   const toggleMic = async () => {
     if (localStreams.audio) {
-      if (localDeviceStream) {
-        const audioTrack = localDeviceStream.getAudioTracks()[0];
+      if (localDeviceStreamRef.current) {
+        const audioTrack = localDeviceStreamRef.current.getAudioTracks()[0];
         if (audioTrack) {
           audioTrack.stop();
-          localDeviceStream.removeTrack(audioTrack);
+          localDeviceStreamRef.current.removeTrack(audioTrack);
         }
       }
       webrtcService.stopProduce('audio');
@@ -336,10 +355,15 @@ export function MeetingRoom() {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const audioTrack = stream.getAudioTracks()[0];
         
-        if (localDeviceStream) {
-          localDeviceStream.addTrack(audioTrack);
+        if (localDeviceStreamRef.current) {
+          localDeviceStreamRef.current.getAudioTracks().forEach(t => {
+            t.stop();
+            localDeviceStreamRef.current?.removeTrack(t);
+          });
+          localDeviceStreamRef.current.addTrack(audioTrack);
         } else {
           setLocalDeviceStream(stream);
+          localDeviceStreamRef.current = stream;
         }
 
         const producer = webrtcService.getProducer('audio');
@@ -361,11 +385,11 @@ export function MeetingRoom() {
   const toggleVideo = async () => {
     if (localStreams.video) {
       // Turn off video and camera access
-      if (localDeviceStream) {
-        const videoTrack = localDeviceStream.getVideoTracks()[0];
+      if (localDeviceStreamRef.current) {
+        const videoTrack = localDeviceStreamRef.current.getVideoTracks()[0];
         if (videoTrack) {
           videoTrack.stop();
-          localDeviceStream.removeTrack(videoTrack);
+          localDeviceStreamRef.current.removeTrack(videoTrack);
         }
       }
       webrtcService.stopProduce('video');
@@ -379,10 +403,15 @@ export function MeetingRoom() {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
         const videoTrack = stream.getVideoTracks()[0];
         
-        if (localDeviceStream) {
-          localDeviceStream.addTrack(videoTrack);
+        if (localDeviceStreamRef.current) {
+          localDeviceStreamRef.current.getVideoTracks().forEach(t => {
+            t.stop();
+            localDeviceStreamRef.current?.removeTrack(t);
+          });
+          localDeviceStreamRef.current.addTrack(videoTrack);
         } else {
           setLocalDeviceStream(stream);
+          localDeviceStreamRef.current = stream;
         }
 
         const producer = webrtcService.getProducer('video');
@@ -404,8 +433,11 @@ export function MeetingRoom() {
   const toggleScreenShare = async () => {
     if (localStreams.screen) {
       webrtcService.stopProduce('screen');
-      localScreenStream?.getTracks().forEach(t => t.stop());
+      if (localScreenStreamRef.current) {
+        localScreenStreamRef.current.getTracks().forEach(t => t.stop());
+      }
       setLocalScreenStream(null);
+      localScreenStreamRef.current = null;
       setLocalStream('screen', false);
     } else {
       try {
@@ -421,11 +453,16 @@ export function MeetingRoom() {
         if (videoTrack) {
           await webrtcService.produce(videoTrack, 'screen');
           setLocalScreenStream(stream);
+          localScreenStreamRef.current = stream;
           setLocalStream('screen', true);
 
           videoTrack.onended = () => {
             webrtcService.stopProduce('screen');
+            if (localScreenStreamRef.current) {
+              localScreenStreamRef.current.getTracks().forEach(t => t.stop());
+            }
             setLocalScreenStream(null);
+            localScreenStreamRef.current = null;
             setLocalStream('screen', false);
           };
         }
