@@ -326,12 +326,7 @@ export function MeetingRoom() {
           localDeviceStream.removeTrack(audioTrack);
         }
       }
-      try {
-        await webrtcService.replaceTrack('audio', null);
-      } catch (err) {
-        const producer = webrtcService.getProducer('audio');
-        if (producer) producer.pause();
-      }
+      webrtcService.stopProduce('audio');
       setLocalStream('audio', false);
     } else {
       try {
@@ -373,13 +368,7 @@ export function MeetingRoom() {
           localDeviceStream.removeTrack(videoTrack);
         }
       }
-      try {
-        await webrtcService.replaceTrack('video', null);
-      } catch (err) {
-        // Fallback for older mediasoup versions
-        const producer = webrtcService.getProducer('video');
-        if (producer) producer.pause();
-      }
+      webrtcService.stopProduce('video');
       setLocalStream('video', false);
     } else {
       // Turn on video
