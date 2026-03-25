@@ -50,13 +50,26 @@ export function setupSockets(io: Server) {
             displayName: p.displayName
           }));
         
+        const existingProducers: any[] = [];
+        room.getPeers().forEach(p => {
+          if (p.socketId === socket.id) return;
+          p.producers.forEach(prod => {
+            existingProducers.push({
+              producerId: prod.id,
+              socketId: p.socketId,
+              kind: (prod.appData as any)?.customKind || (prod as any).kind
+            });
+          });
+        });
+        
         callback({
           room: {
             roomId: room.id,
             participantCount: room.getPeers().length
           },
           peers: peersInfo,
-          routerRtpCapabilities: room.router.rtpCapabilities
+          routerRtpCapabilities: room.router.rtpCapabilities,
+          producers: existingProducers
         });
 
         socket.to(roomId).emit('participantJoined', {

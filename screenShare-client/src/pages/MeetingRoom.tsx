@@ -9,13 +9,14 @@ import { socket } from '../services/socket';
 import { webrtcService } from '../services/webrtc';
 import { useAppStore } from '../store/useAppStore';
 
-const VideoPlayer = ({ track, muted, autoPlay, className }: any) => {
+const VideoPlayer = ({ track, autoPlay, className }: any) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (videoRef.current && track) {
       const stream = new MediaStream([track]);
       videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.error("Error playing video:", e));
     }
   }, [track]);
 
@@ -24,7 +25,9 @@ const VideoPlayer = ({ track, muted, autoPlay, className }: any) => {
       ref={videoRef}
       autoPlay={autoPlay}
       playsInline
-      muted={muted}
+      // Always mute VideoPlayer because remote audio is handled via separate AudioPlayer. 
+      // Unmuted dynamically added videos are often blocked by browsers, causing blank screens.
+      muted={true}
       className={className}
     />
   );
@@ -52,7 +55,6 @@ const Tile = ({ entry }: { entry: any }) => (
     ) : (
       <VideoPlayer 
         track={entry.track} 
-        muted={entry.isLocal} 
         autoPlay 
         className={`absolute inset-0 w-full h-full ${entry.type === 'screen' ? 'object-contain bg-black' : 'object-cover'} ${entry.type === 'video' && entry.isLocal ? '-scale-x-100' : ''}`} 
       />
@@ -161,6 +163,18 @@ export function MeetingRoom() {
       socket.connect();
     });
 
+  const onNewProducer = async (data: any) => {
+    try {
+      const exists = useAppStore.getState().peers.some(p => p.socketId === data.socketId);
+      if (!exists) {
+        addPeer({ socketId: data.socketId, displayName: 'Participant' });
+      }
+      await webrtcService.consume(data.producerId, data.socketId, data.kind);
+    } catch (err) {
+      console.error('Error consuming new producer:', err);
+    }
+  };
+
   useEffect(() => {
     if (!displayName || !id) {
       navigate('/');
@@ -188,6 +202,12 @@ export function MeetingRoom() {
           await webrtcService.loadDevice(response.routerRtpCapabilities);
           await webrtcService.createSendTransport();
           await webrtcService.createRecvTransport();
+
+          if (response.producers && Array.isArray(response.producers) && response.producers.length > 0) {
+            for (const p of response.producers) {
+              onNewProducer(p);
+            }
+          }
 
           socket.emit('getProducers', (producers: any[]) => {
             if (producers && producers.length > 0) {
@@ -260,21 +280,21 @@ export function MeetingRoom() {
     init();
 
     // Socket listeners
-    const onParticipantJoined = (data: any) => addPeer(data);
+    const onParticipantJoined = (data: any) => {
+      addPeer(data);
+      // Refresh producers list to avoid missing any in-flight produce events
+      socket.emit('getProducers', (producers: any[]) => {
+        if (producers && producers.length > 0) {
+          producers.forEach(p => onNewProducer(p));
+        }
+      });
+    };
     const onParticipantLeft = (data: any) => {
       removePeer(data.socketId);
       removeRemotePeerStreams(data.socketId);
     };
     const onParticipantCountUpdated = (data: any) => setParticipantCount(data.count);
     
-    const onNewProducer = async (data: any) => {
-      try {
-        await webrtcService.consume(data.producerId, data.socketId, data.kind);
-      } catch (err) {
-        console.error('Error consuming new producer:', err);
-      }
-    };
-
     const onRoomMessage = (msg: any) => addMessage(msg);
     const onSystemMessage = (msg: any) => addMessage({ ...msg, type: 'system' });
     const onHandRaised = (data: any) => {
