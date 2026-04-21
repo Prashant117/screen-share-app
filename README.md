@@ -239,4 +239,117 @@ It is not used for media transport. Media always flows over WebRTC, not over Web
                                      |  coturn   |
                                      | STUN/TURN |
                                      +-----------+
+```
 
+---
+
+## Step-by-Step Guide to Run This Project
+
+This guide will walk you through setting up and running the Screen Share App locally.
+
+### Prerequisites
+
+Before you begin, ensure you have the following installed:
+-   **Node.js**: Version 18 or higher (includes npm).
+-   **Git**: For cloning the repository.
+-   **Docker and Docker Compose** (Optional, for running coturn or other services).
+
+### 1. Clone the Repository
+
+First, clone the project repository to your local machine:
+
+```bash
+git clone <repository-url>
+cd screen-share-app
+```
+*(Replace `<repository-url>` with the actual URL of your repository)*
+
+### 2. Install Dependencies
+
+The project is structured as a monorepo with a client and a server. You need to install dependencies for both.
+
+```bash
+# Install dependencies for both client and server
+npm install --prefix screenShare-client
+npm install --prefix screenShare-server
+```
+
+### 3. Environment Configuration
+
+#### Server (`screenShare-server`)
+
+Create a `.env` file in the `screenShare-server` directory with the following content:
+
+```
+PORT=3000
+LISTEN_IP=0.0.0.0
+ANNOUNCED_IP=127.0.0.1
+CLIENT_URLS=http://localhost:5173,http://localhost:5174,http://localhost:5175
+MEDIASOUP_MIN_PORT=40000
+MEDIASOUP_MAX_PORT=49999
+```
+
+-   **`PORT`**: The port the server will listen on.
+-   **`LISTEN_IP`**: The IP address the server will bind to. `0.0.0.0` makes it accessible from any network interface.
+-   **`ANNOUNCED_IP`**: **Crucial for WebRTC**. This should be the IP address that clients can use to reach your server.
+    -   For local testing on the same machine, `127.0.0.1` is fine.
+    -   For LAN testing (other devices on your network), set this to your machine's local IP address (e.g., `192.168.1.100`).
+-   **`CLIENT_URLS`**: A comma-separated list of origins that are allowed to connect to your Socket.IO server. Include all client URLs you might use for testing.
+-   **`MEDIASOUP_MIN_PORT` / `MEDIASOUP_MAX_PORT`**: Port range for mediasoup RTP traffic. Ensure these ports are open if you have a firewall.
+
+#### Client (`screenShare-client`)
+
+Create a `.env` file in the `screenShare-client` directory with the following content:
+
+```
+VITE_SERVER_URL=http://localhost:3000
+VITE_SOCKET_URL=http://localhost:3000
+```
+
+-   **`VITE_SERVER_URL`**: The base URL for API requests (e.g., health checks).
+-   **`VITE_SOCKET_URL`**: The URL for the Socket.IO connection.
+    -   For local testing, `http://localhost:3000` is typical.
+    -   For LAN testing, change this to the `ANNOUNCED_IP` and `PORT` of your server (e.g., `http://192.168.1.100:3000`).
+
+### 4. Run the Server
+
+Navigate to the `screenShare-server` directory and start the development server:
+
+```bash
+cd screenShare-server
+npm run dev
+```
+
+You should see output indicating that mediasoup workers are created and the server is listening on the configured IP and port.
+
+### 5. Run the Client
+
+In a new terminal, navigate to the `screenShare-client` directory and start the development client:
+
+```bash
+cd screenShare-client
+npm run dev
+```
+
+Vite will start the client and provide a local URL (e.g., `http://localhost:5173/`). If port 5173 is in use, it will automatically pick another (e.g., `http://localhost:5174/`).
+
+**For LAN Testing (Client)**: If you want other devices on your network to access the client, you need to expose the Vite development server:
+
+```bash
+npm run dev -- --host
+```
+
+Vite will then provide a network URL (e.g., `http://192.168.1.100:5173/`).
+
+### 6. Test the Application
+
+1.  Open your web browser and navigate to the client URL (e.g., `http://localhost:5173/`).
+2.  Enter a display name and click "Create New Room" or "Join Room" with an existing Room ID.
+3.  Open a second browser tab/window (or another device for LAN testing) and join the same room.
+4.  Enable your camera and/or start screen sharing on one side.
+5.  Verify that the other participant(s) can see the shared camera feed and/or screen.
+6.  Test chat functionality, mic/video toggles, and leaving the room.
+
+---
+
+This comprehensive guide should help you get the project up and running smoothly.

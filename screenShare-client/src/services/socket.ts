@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL =
+export const SOCKET_URL =
   (import.meta as any).env?.VITE_SOCKET_URL ||
   (import.meta as any).env?.VITE_SERVER_URL ||
   'http://localhost:3000';

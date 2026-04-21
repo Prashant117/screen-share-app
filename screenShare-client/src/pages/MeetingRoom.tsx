@@ -5,7 +5,7 @@ import {
   MonitorUp, PhoneOff, MessageSquare, 
   Users, Expand, Hand, Maximize, Minimize, SlidersHorizontal, LayoutGrid, PersonStanding
 } from 'lucide-react';
-import { socket } from '../services/socket';
+import { socket, SOCKET_URL } from '../services/socket';
 import { webrtcService } from '../services/webrtc';
 import { useAppStore } from '../store/useAppStore';
 
@@ -156,7 +156,8 @@ export function MeetingRoom() {
       };
       const onError = (err: any) => {
         socket.off('connect', onConnect);
-        reject(new Error(err?.message || 'Socket connection failed'));
+        const msg = err?.message || 'Socket connection failed';
+        reject(new Error(`Could not connect to ${SOCKET_URL}. ${msg}`));
       };
       socket.once('connect', onConnect);
       socket.once('connect_error', onError);
