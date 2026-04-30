@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
-dotenv.config();
+import os from 'os';
+dotenv.config({ override: true });
 
 const parseOrigins = (): (string | RegExp)[] | true => {
   const urls = process.env.CLIENT_URLS || process.env.CLIENT_URL || '*';
@@ -14,7 +15,7 @@ export const config = {
   announcedIp: process.env.ANNOUNCED_IP || '127.0.0.1',
   clientOrigins: parseOrigins(),
   mediasoup: {
-    numWorkers: Object.keys(require('os').cpus()).length,
+    numWorkers: os.cpus().length,
     worker: {
       rtcMinPort: parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10),
       rtcMaxPort: parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10),
@@ -66,8 +67,8 @@ export const config = {
           announcedIp: process.env.ANNOUNCED_IP || '127.0.0.1',
         },
       ],
-      initialAvailableOutgoingBitrate: 1000000,
-      minimumAvailableOutgoingBitrate: 600000,
+      initialAvailableOutgoingBitrate: 1_000_000,
+      minimumAvailableOutgoingBitrate: 600_000,
       maxSctpMessageSize: 262144,
       enableUdp: true,
       enableTcp: true,

@@ -245,111 +245,116 @@ It is not used for media transport. Media always flows over WebRTC, not over Web
 
 ## Step-by-Step Guide to Run This Project
 
-This guide will walk you through setting up and running the Screen Share App locally.
+This guide walks you through running the server + client in dev mode.
 
 ### Prerequisites
+- **Node.js 18+** (includes npm)
+- Optional: **Docker** (only needed if you want to run your own TURN server)
 
-Before you begin, ensure you have the following installed:
--   **Node.js**: Version 18 or higher (includes npm).
--   **Git**: For cloning the repository.
--   **Docker and Docker Compose** (Optional, for running coturn or other services).
+### 1) Install dependencies
 
-### 1. Clone the Repository
-
-First, clone the project repository to your local machine:
+From the repo root:
 
 ```bash
-git clone <repository-url>
-cd screen-share-app
+cd screenShare-server
+npm install
+cd ../screenShare-client
+npm install
 ```
-*(Replace `<repository-url>` with the actual URL of your repository)*
 
-### 2. Install Dependencies
+### 2) Configure environment variables
 
-The project is structured as a monorepo with a client and a server. You need to install dependencies for both.
+#### Server (`screenShare-server/.env`)
+
+Start from the example file and edit values:
 
 ```bash
-# Install dependencies for both client and server
-npm install --prefix screenShare-client
-npm install --prefix screenShare-server
+cd screenShare-server
+cp .env.example .env
 ```
 
-### 3. Environment Configuration
+Recommended `.env` for local dev (same machine):
 
-#### Server (`screenShare-server`)
-
-Create a `.env` file in the `screenShare-server` directory with the following content:
-
-```
+```env
 PORT=3000
 LISTEN_IP=0.0.0.0
 ANNOUNCED_IP=127.0.0.1
-CLIENT_URLS=http://localhost:5173,http://localhost:5174,http://localhost:5175
+CLIENT_URLS=*
 MEDIASOUP_MIN_PORT=40000
 MEDIASOUP_MAX_PORT=49999
 ```
 
--   **`PORT`**: The port the server will listen on.
--   **`LISTEN_IP`**: The IP address the server will bind to. `0.0.0.0` makes it accessible from any network interface.
--   **`ANNOUNCED_IP`**: **Crucial for WebRTC**. This should be the IP address that clients can use to reach your server.
-    -   For local testing on the same machine, `127.0.0.1` is fine.
-    -   For LAN testing (other devices on your network), set this to your machine's local IP address (e.g., `192.168.1.100`).
--   **`CLIENT_URLS`**: A comma-separated list of origins that are allowed to connect to your Socket.IO server. Include all client URLs you might use for testing.
--   **`MEDIASOUP_MIN_PORT` / `MEDIASOUP_MAX_PORT`**: Port range for mediasoup RTP traffic. Ensure these ports are open if you have a firewall.
+Recommended `.env` for LAN testing (other devices on the same Wi‑Fi/LAN):
 
-#### Client (`screenShare-client`)
-
-Create a `.env` file in the `screenShare-client` directory with the following content:
-
+```env
+PORT=3000
+LISTEN_IP=0.0.0.0
+ANNOUNCED_IP=<YOUR_SERVER_LAN_IP>
+CLIENT_URLS=*
+MEDIASOUP_MIN_PORT=40000
+MEDIASOUP_MAX_PORT=49999
 ```
+
+Notes:
+- `ANNOUNCED_IP` is critical for WebRTC. Set it to the IP other devices can reach (for example: `192.168.1.17`).
+- `CLIENT_URLS=*` allows Socket.IO connections from any origin during development. You can also set a comma-separated list of allowed origins.
+- Ensure UDP ports `MEDIASOUP_MIN_PORT..MEDIASOUP_MAX_PORT` are not blocked by your firewall when testing across devices.
+
+#### Client (`screenShare-client/.env`)
+
+```bash
+cd ../screenShare-client
+cp .env.example .env
+```
+
+Local dev (same machine):
+
+```env
 VITE_SERVER_URL=http://localhost:3000
 VITE_SOCKET_URL=http://localhost:3000
 ```
 
--   **`VITE_SERVER_URL`**: The base URL for API requests (e.g., health checks).
--   **`VITE_SOCKET_URL`**: The URL for the Socket.IO connection.
-    -   For local testing, `http://localhost:3000` is typical.
-    -   For LAN testing, change this to the `ANNOUNCED_IP` and `PORT` of your server (e.g., `http://192.168.1.100:3000`).
+LAN testing (server running on another device or same device but accessed via LAN IP):
 
-### 4. Run the Server
+```env
+VITE_SERVER_URL=http://<YOUR_SERVER_LAN_IP>:3000
+VITE_SOCKET_URL=http://<YOUR_SERVER_LAN_IP>:3000
+```
 
-Navigate to the `screenShare-server` directory and start the development server:
+### 3) Run the server
+
+In one terminal:
 
 ```bash
 cd screenShare-server
 npm run dev
 ```
 
-You should see output indicating that mediasoup workers are created and the server is listening on the configured IP and port.
+The server listens on `http://0.0.0.0:3000` by default.
 
-### 5. Run the Client
+### 4) Run the client
 
-In a new terminal, navigate to the `screenShare-client` directory and start the development client:
+In a second terminal:
 
 ```bash
 cd screenShare-client
 npm run dev
 ```
 
-Vite will start the client and provide a local URL (e.g., `http://localhost:5173/`). If port 5173 is in use, it will automatically pick another (e.g., `http://localhost:5174/`).
-
-**For LAN Testing (Client)**: If you want other devices on your network to access the client, you need to expose the Vite development server:
+For LAN access (open the UI from another device), expose Vite on your network:
 
 ```bash
 npm run dev -- --host
 ```
 
-Vite will then provide a network URL (e.g., `http://192.168.1.100:5173/`).
+Open the URL that Vite prints (for example `http://192.168.1.17:5174/`).
 
-### 6. Test the Application
+### 5) Use the app
+1. Open the client URL in a browser.
+2. Enter your name.
+3. Create a room (or join with an existing room ID).
+4. Open the same room from another tab/device to verify multi-user behavior.
 
-1.  Open your web browser and navigate to the client URL (e.g., `http://localhost:5173/`).
-2.  Enter a display name and click "Create New Room" or "Join Room" with an existing Room ID.
-3.  Open a second browser tab/window (or another device for LAN testing) and join the same room.
-4.  Enable your camera and/or start screen sharing on one side.
-5.  Verify that the other participant(s) can see the shared camera feed and/or screen.
-6.  Test chat functionality, mic/video toggles, and leaving the room.
-
----
-
-This comprehensive guide should help you get the project up and running smoothly.
+### Troubleshooting
+- If the meeting page kicks you back to Home after ~2 minutes, the client did not receive the `joinRoom` acknowledgement from the server.
+- Camera/mic/screen capture may be blocked on non-HTTPS origins by the browser. For best results use `localhost` on the same machine, or serve the client over HTTPS when testing from another device.

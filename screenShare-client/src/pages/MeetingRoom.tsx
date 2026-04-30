@@ -3,21 +3,27 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { 
   Mic, MicOff, Video, VideoOff, 
   MonitorUp, PhoneOff, MessageSquare, 
-  Users, Expand, Hand, Maximize, Minimize, SlidersHorizontal, LayoutGrid, PersonStanding
+  Users, Expand, Hand, Maximize, Minimize, SlidersHorizontal, LayoutGrid, PersonStanding, Copy, Link2
 } from 'lucide-react';
 import { socket, SOCKET_URL } from '../services/socket';
 import { webrtcService } from '../services/webrtc';
 import { useAppStore } from '../store/useAppStore';
 
+let pendingLeaveRoomTimer: ReturnType<typeof setTimeout> | null = null;
+
 const VideoPlayer = ({ track, autoPlay, className }: any) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && track) {
-      const stream = new MediaStream([track]);
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(e => console.error("Error playing video:", e));
-    }
+    if (!videoRef.current || !track) return;
+    const stream = new MediaStream([track]);
+    videoRef.current.srcObject = stream;
+    videoRef.current.play().catch(e => console.error("Error playing video:", e));
+    return () => {
+      // Clear srcObject so the browser releases the video decoder;
+      // do NOT stop the track here — it is owned by the producer/consumer.
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
   }, [track]);
 
   return (
@@ -25,7 +31,7 @@ const VideoPlayer = ({ track, autoPlay, className }: any) => {
       ref={videoRef}
       autoPlay={autoPlay}
       playsInline
-      // Always mute VideoPlayer because remote audio is handled via separate AudioPlayer. 
+      // Always mute VideoPlayer because remote audio is handled via separate AudioPlayer.
       // Unmuted dynamically added videos are often blocked by browsers, causing blank screens.
       muted={true}
       className={className}
@@ -37,10 +43,12 @@ const AudioPlayer = ({ track }: any) => {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
-    if (audioRef.current && track) {
-      const stream = new MediaStream([track]);
-      audioRef.current.srcObject = stream;
-    }
+    if (!audioRef.current || !track) return;
+    const stream = new MediaStream([track]);
+    audioRef.current.srcObject = stream;
+    return () => {
+      if (audioRef.current) audioRef.current.srcObject = null;
+    };
   }, [track]);
 
   return <audio ref={audioRef} autoPlay />;
@@ -119,15 +127,45 @@ export function MeetingRoom() {
   const [toasts, setToasts] = useState<Array<{ id: string; text: string }>>([]);
   
   const showToast = (msg: string) => {
-    const idToast = Math.random().toString(36).slice(2);
+    const idToast = crypto.randomUUID();
     setToasts(prev => [...prev, { id: idToast, text: msg }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== idToast)), 5000);
   };
+
+  const copyToClipboard = async (text: string, successMessage: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.style.position = 'fixed';
+        el.style.top = '0';
+        el.style.left = '0';
+        el.style.opacity = '0';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
+      showToast(successMessage);
+    } catch {
+      showToast('Copy failed. Please copy manually.');
+    }
+  };
   
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
   const [localDeviceStream, setLocalDeviceStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const localDeviceStreamRef = useRef<MediaStream | null>(null);
   const localScreenStreamRef = useRef<MediaStream | null>(null);
+  const isMicTogglingRef = useRef(false);
+  const isVideoTogglingRef = useRef(false);
+  const hasLeftRef = useRef(false);
+  // Stores the fail-safe navigation timeouts so they can be cleared on successful join
+  const failSafeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failSafeWarningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     displayName,
@@ -146,6 +184,12 @@ export function MeetingRoom() {
     setParticipantCount,
     removeRemotePeerStreams
   } = useAppStore();
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const ensureSocketConnected = () =>
     new Promise<void>((resolve, reject) => {
@@ -177,11 +221,20 @@ export function MeetingRoom() {
   };
 
   useEffect(() => {
-    if (!displayName || !id) {
+    if (!id) {
       navigate('/');
       return;
     }
+    if (!displayName) {
+      navigate(`/?roomId=${encodeURIComponent(id)}`);
+      return;
+    }
     let isUnmounted = false;
+
+    if (pendingLeaveRoomTimer) {
+      clearTimeout(pendingLeaveRoomTimer);
+      pendingLeaveRoomTimer = null;
+    }
 
     const init = async () => {
       try {
@@ -189,6 +242,7 @@ export function MeetingRoom() {
 
         let joined = false;
         socket.emit('joinRoom', { roomId: id, displayName }, async (response: any) => {
+          if (isUnmounted) return;
           if (response.error) {
             console.error(response.error);
             navigate('/');
@@ -196,13 +250,37 @@ export function MeetingRoom() {
           }
 
           joined = true;
+          // Clear pre-join timers and start 2-minute session fail-safe
+          if (failSafeTimeoutRef.current) { clearTimeout(failSafeTimeoutRef.current); }
+          if (failSafeWarningTimeoutRef.current) { clearTimeout(failSafeWarningTimeoutRef.current); }
+          failSafeWarningTimeoutRef.current = setTimeout(() => {
+            if (!isUnmounted) showToast('Meeting will end automatically in 30 seconds.');
+          }, 90_000);
+          failSafeTimeoutRef.current = setTimeout(() => {
+            if (isUnmounted) return;
+            hasLeftRef.current = true;
+            try {
+              webrtcService.close();
+              localDeviceStreamRef.current?.getTracks().forEach(t => t.stop());
+              localScreenStreamRef.current?.getTracks().forEach(t => t.stop());
+            } catch {}
+            socket.emit('leaveRoom');
+            socket.disconnect();
+            navigate('/');
+          }, 120_000);
+
           setRoomInfo(response.room);
           setPeers(response.peers || []);
           setParticipantCount(response.room.participantCount);
-          
+
           await webrtcService.loadDevice(response.routerRtpCapabilities);
+          if (isUnmounted) { webrtcService.close(); return; }
+
           await webrtcService.createSendTransport();
+          if (isUnmounted) { webrtcService.close(); return; }
+
           await webrtcService.createRecvTransport();
+          if (isUnmounted) { webrtcService.close(); return; }
 
           if (response.producers && Array.isArray(response.producers) && response.producers.length > 0) {
             for (const p of response.producers) {
@@ -219,7 +297,7 @@ export function MeetingRoom() {
           // Get local camera/mic
           try {
             const combinedStream = new MediaStream();
-            
+
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
               showToast("Camera/Mic access requires a secure HTTPS connection or localhost.");
             } else {
@@ -230,11 +308,17 @@ export function MeetingRoom() {
                   audioTrack.stop();
                 } else if (audioTrack) {
                   combinedStream.addTrack(audioTrack);
-                  await webrtcService.produce(audioTrack, 'audio');
-                  setLocalStream('audio', true);
+                  try {
+                    await webrtcService.produce(audioTrack, 'audio');
+                    if (!isUnmounted) setLocalStream('audio', true);
+                  } catch (produceErr: any) {
+                    console.warn('Audio produce failed', produceErr);
+                    combinedStream.removeTrack(audioTrack);
+                    audioTrack.stop();
+                  }
                 }
-              } catch (e: any) { 
-                console.warn('Audio not available initially', e); 
+              } catch (e: any) {
+                console.warn('Audio not available initially', e);
                 if (e.name === 'NotAllowedError') showToast('Microphone access denied. Please allow it in browser settings.');
               }
 
@@ -245,33 +329,35 @@ export function MeetingRoom() {
                   videoTrack.stop();
                 } else if (videoTrack) {
                   combinedStream.addTrack(videoTrack);
-                  await webrtcService.produce(videoTrack, 'video');
-                  setLocalStream('video', true);
+                  try {
+                    await webrtcService.produce(videoTrack, 'video');
+                    if (!isUnmounted) setLocalStream('video', true);
+                  } catch (produceErr: any) {
+                    console.warn('Video produce failed', produceErr);
+                    combinedStream.removeTrack(videoTrack);
+                    videoTrack.stop();
+                  }
                 }
-              } catch (e: any) { 
-                console.warn('Video not available initially', e); 
+              } catch (e: any) {
+                console.warn('Video not available initially', e);
                 if (e.name === 'NotAllowedError') showToast('Camera access denied. Please allow it in browser settings.');
               }
             }
 
-            if (combinedStream.getTracks().length > 0) {
-              setLocalDeviceStream(combinedStream);
-              localDeviceStreamRef.current = combinedStream;
-            } else {
-              const emptyStream = new MediaStream();
-              setLocalDeviceStream(emptyStream);
-              localDeviceStreamRef.current = emptyStream;
+            if (!isUnmounted) {
+              const stream = combinedStream.getTracks().length > 0 ? combinedStream : new MediaStream();
+              setLocalDeviceStream(stream);
+              localDeviceStreamRef.current = stream;
             }
-
           } catch (e) {
             console.error("Could not init media streams", e);
           }
         });
 
-        // Fail-safe if join fails
-        setTimeout(() => {
+        // Fail-safe: navigate away if the server never responds to joinRoom
+        failSafeTimeoutRef.current = setTimeout(() => {
           if (!joined) navigate('/');
-        }, 5000);
+        }, 30_000);
       } catch (err) {
         console.error(err);
         navigate('/');
@@ -301,14 +387,14 @@ export function MeetingRoom() {
     const onHandRaised = (data: any) => {
       const text = data.raised ? `${data.displayName || 'Participant'} raised hand` : `${data.displayName || 'Participant'} lowered hand`;
       addMessage({
-        id: Math.random().toString(36).slice(2),
+        id: crypto.randomUUID(),
         senderId: data.socketId,
         displayName: data.displayName,
         content: text,
         timestamp: data.timestamp,
         type: 'system'
       });
-      const idToast = Math.random().toString(36).slice(2);
+      const idToast = crypto.randomUUID();
       setToasts(prev => [...prev, { id: idToast, text }]);
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== idToast)), 4000);
     };
@@ -333,7 +419,14 @@ export function MeetingRoom() {
 
     return () => {
       isUnmounted = true;
-      socket.emit('leaveRoom');
+      if (failSafeTimeoutRef.current) {
+        clearTimeout(failSafeTimeoutRef.current);
+        failSafeTimeoutRef.current = null;
+      }
+      if (failSafeWarningTimeoutRef.current) {
+        clearTimeout(failSafeWarningTimeoutRef.current);
+        failSafeWarningTimeoutRef.current = null;
+      }
       webrtcService.close();
       if (localDeviceStreamRef.current) {
         localDeviceStreamRef.current.getTracks().forEach(t => t.stop());
@@ -341,8 +434,6 @@ export function MeetingRoom() {
       if (localScreenStreamRef.current) {
         localScreenStreamRef.current.getTracks().forEach(t => t.stop());
       }
-      localDeviceStream?.getTracks().forEach(t => t.stop());
-      localScreenStream?.getTracks().forEach(t => t.stop());
       socket.off('participantJoined', onParticipantJoined);
       socket.off('participantLeft', onParticipantLeft);
       socket.off('participantCountUpdated', onParticipantCountUpdated);
@@ -352,30 +443,35 @@ export function MeetingRoom() {
       socket.off('handRaised', onHandRaised);
       socket.off('producerClosed', onProducerClosed);
       clearMessages();
-      if (localDeviceStreamRef.current) localDeviceStreamRef.current.getTracks().forEach(t => t.stop());
-      if (localScreenStreamRef.current) localScreenStreamRef.current.getTracks().forEach(t => t.stop());
+
+      pendingLeaveRoomTimer = setTimeout(() => {
+        pendingLeaveRoomTimer = null;
+        if (!hasLeftRef.current) socket.emit('leaveRoom');
+      }, 0);
     };
   }, []);
 
   const toggleMic = async () => {
-    if (localStreams.audio) {
-      if (localDeviceStreamRef.current) {
-        const audioTrack = localDeviceStreamRef.current.getAudioTracks()[0];
-        if (audioTrack) {
-          audioTrack.stop();
-          localDeviceStreamRef.current.removeTrack(audioTrack);
+    if (isMicTogglingRef.current) return;
+    isMicTogglingRef.current = true;
+    try {
+      if (localStreams.audio) {
+        if (localDeviceStreamRef.current) {
+          const audioTrack = localDeviceStreamRef.current.getAudioTracks()[0];
+          if (audioTrack) {
+            audioTrack.stop();
+            localDeviceStreamRef.current.removeTrack(audioTrack);
+          }
         }
-      }
-      webrtcService.stopProduce('audio');
-      setLocalStream('audio', false);
-    } else {
-      try {
+        webrtcService.stopProduce('audio');
+        setLocalStream('audio', false);
+      } else {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('Media devices API not available. This usually requires HTTPS.');
         }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const audioTrack = stream.getAudioTracks()[0];
-        
+
         if (localDeviceStreamRef.current) {
           localDeviceStreamRef.current.getAudioTracks().forEach(t => {
             t.stop();
@@ -388,42 +484,44 @@ export function MeetingRoom() {
         }
 
         const producer = webrtcService.getProducer('audio');
-        if (producer) {
+        if (producer && !producer.closed) {
           await webrtcService.replaceTrack('audio', audioTrack);
           if (producer.paused) producer.resume();
         } else {
           await webrtcService.produce(audioTrack, 'audio');
         }
         setLocalStream('audio', true);
-      } catch (err: any) {
-        console.error('Error enabling audio:', err);
-        if (err.name === 'NotAllowedError') showToast('Microphone permission denied. Please allow it in browser settings.');
-        else showToast(err.message || 'Could not access microphone');
       }
+    } catch (err: any) {
+      console.error('Error toggling audio:', err);
+      if (err.name === 'NotAllowedError') showToast('Microphone permission denied. Please allow it in browser settings.');
+      else showToast(err.message || 'Could not access microphone');
+    } finally {
+      isMicTogglingRef.current = false;
     }
   };
 
   const toggleVideo = async () => {
-    if (localStreams.video) {
-      // Turn off video and camera access
-      if (localDeviceStreamRef.current) {
-        const videoTrack = localDeviceStreamRef.current.getVideoTracks()[0];
-        if (videoTrack) {
-          videoTrack.stop();
-          localDeviceStreamRef.current.removeTrack(videoTrack);
+    if (isVideoTogglingRef.current) return;
+    isVideoTogglingRef.current = true;
+    try {
+      if (localStreams.video) {
+        if (localDeviceStreamRef.current) {
+          const videoTrack = localDeviceStreamRef.current.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTrack.stop();
+            localDeviceStreamRef.current.removeTrack(videoTrack);
+          }
         }
-      }
-      webrtcService.stopProduce('video');
-      setLocalStream('video', false);
-    } else {
-      // Turn on video
-      try {
+        webrtcService.stopProduce('video');
+        setLocalStream('video', false);
+      } else {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('Media devices API not available. This usually requires HTTPS.');
         }
         const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
         const videoTrack = stream.getVideoTracks()[0];
-        
+
         if (localDeviceStreamRef.current) {
           localDeviceStreamRef.current.getVideoTracks().forEach(t => {
             t.stop();
@@ -436,18 +534,20 @@ export function MeetingRoom() {
         }
 
         const producer = webrtcService.getProducer('video');
-        if (producer) {
+        if (producer && !producer.closed) {
           await webrtcService.replaceTrack('video', videoTrack);
           if (producer.paused) producer.resume();
         } else {
           await webrtcService.produce(videoTrack, 'video');
         }
         setLocalStream('video', true);
-      } catch (err: any) {
-        console.error('Error enabling video:', err);
-        if (err.name === 'NotAllowedError') showToast('Camera permission denied. Please allow it in browser settings.');
-        else showToast(err.message || 'Could not access camera');
       }
+    } catch (err: any) {
+      console.error('Error toggling video:', err);
+      if (err.name === 'NotAllowedError') showToast('Camera permission denied. Please allow it in browser settings.');
+      else showToast(err.message || 'Could not access camera');
+    } finally {
+      isVideoTogglingRef.current = false;
     }
   };
 
@@ -499,25 +599,22 @@ export function MeetingRoom() {
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-    socket.emit('sendRoomMessage', { content: chatInput }, () => {});
+    socket.emit('sendRoomMessage', { content: chatInput }, (response: any) => {
+      if (response?.error) showToast(response.error);
+    });
     setChatInput('');
   };
 
   const leaveRoom = () => {
+    hasLeftRef.current = true;
     try {
-      socket.emit('leaveRoom', () => {
-        try {
-          webrtcService.close();
-          localDeviceStream?.getTracks().forEach(t => t.stop());
-          localScreenStream?.getTracks().forEach(t => t.stop());
-          socket.disconnect();
-        } finally {
-          navigate('/');
-        }
-      });
-    } catch {
-      navigate('/');
-    }
+      webrtcService.close();
+      localDeviceStream?.getTracks().forEach(t => t.stop());
+      localScreenStream?.getTracks().forEach(t => t.stop());
+    } catch {}
+    socket.emit('leaveRoom');
+    socket.disconnect();
+    navigate('/');
   };
 
   // Build grid blocks
@@ -574,9 +671,8 @@ export function MeetingRoom() {
   const screenShareCount = entries.filter(e => e.type === 'screen').length;
   
   useEffect(() => {
-    if (screenShareCount > 0 && viewMode !== 'speaker') {
-      setViewMode('speaker');
-    }
+    // Auto-switch to speaker when a screen share starts; revert to grid when all stop
+    setViewMode(screenShareCount > 0 ? 'speaker' : 'grid');
   }, [screenShareCount]);
 
   // Calculate grid layout sizes
@@ -602,8 +698,26 @@ export function MeetingRoom() {
         
         {/* Top Header */}
         <div className="h-12 flex items-center justify-between px-4 pb-2 pt-4 absolute top-0 w-full z-10 pointer-events-none">
-          <div className="bg-black/50 px-3 py-1.5 rounded-md backdrop-blur-sm pointer-events-auto">
+          <div className="bg-black/50 px-3 py-1.5 rounded-md backdrop-blur-sm pointer-events-auto flex items-center gap-2">
             <span className="font-medium">{id}</span>
+            <button
+              type="button"
+              className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              title="Copy Room ID"
+              aria-label="Copy Room ID"
+              onClick={() => copyToClipboard(String(id), 'Room ID copied')}
+            >
+              <Copy className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              title="Copy Share Link"
+              aria-label="Copy Share Link"
+              onClick={() => copyToClipboard(`${window.location.origin}/?roomId=${encodeURIComponent(String(id))}`, 'Share link copied')}
+            >
+              <Link2 className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -658,7 +772,7 @@ export function MeetingRoom() {
         <div
           className="fixed bottom-0 left-0 right-0 bg-[#202124] flex items-center justify-between px-2 sm:px-6 z-[1000] transition-all duration-300 pointer-events-auto shadow-[0_-10px_40px_rgba(0,0,0,0.5)]"
           style={{ 
-            paddingRight: activeSidebar ? '20rem' : (window.innerWidth < 640 ? '0.5rem' : '1.5rem'),
+            paddingRight: activeSidebar ? '20rem' : (isMobile ? '0.5rem' : '1.5rem'),
             height: 'calc(5rem + env(safe-area-inset-bottom))',
             paddingBottom: 'env(safe-area-inset-bottom)'
           }}

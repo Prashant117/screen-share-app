@@ -6,6 +6,7 @@ import { cn } from '../utils/cn';
 
 export function ChatPanel() {
   const [input, setInput] = useState('');
+  const [sendError, setSendError] = useState('');
   const { messages } = useAppStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -20,10 +21,11 @@ export function ChatPanel() {
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
-    
+    setSendError('');
     socket.emit('sendRoomMessage', { content: input }, (response: any) => {
-      if (response.error) {
-        console.error('Failed to send message:', response.error);
+      if (response?.error) {
+        setSendError(response.error);
+        setTimeout(() => setSendError(''), 3500);
       }
     });
     setInput('');
@@ -86,6 +88,11 @@ export function ChatPanel() {
         <div ref={messagesEndRef} />
       </div>
 
+      {sendError && (
+        <div className="mx-4 mb-1 px-3 py-1.5 bg-red-500/20 border border-red-500/40 text-red-400 text-xs rounded-md">
+          {sendError}
+        </div>
+      )}
       <form onSubmit={handleSend} className="p-4 border-t border-gray-800 bg-gray-800/50 flex gap-2">
         <input
           type="text"

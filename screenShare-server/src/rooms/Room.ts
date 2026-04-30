@@ -23,6 +23,11 @@ export class Room {
   }
 
   addPeer(peer: Peer) {
+    // Close any stale peer with the same socket ID before overwriting (e.g. reconnect)
+    const existing = this.peers.get(peer.socketId);
+    if (existing) {
+      try { existing.close(); } catch {}
+    }
     this.peers.set(peer.socketId, peer);
   }
 
@@ -32,23 +37,39 @@ export class Room {
 
   removePeer(socketId: string) {
     const peer = this.peers.get(socketId);
-    if (peer) {
-      peer.close();
-      this.peers.delete(socketId);
+    if (!peer) return;
+
+    // Close consumers on other peers that were consuming this peer's producers
+    const leavingProducerIds = new Set(peer.producers.keys());
+    if (leavingProducerIds.size > 0) {
+      this.peers.forEach(otherPeer => {
+        if (otherPeer.socketId === socketId) return;
+        otherPeer.consumers.forEach((consumer, consumerId) => {
+          if (leavingProducerIds.has(consumer.producerId)) {
+            try { consumer.close(); } catch {}
+            otherPeer.consumers.delete(consumerId);
+          }
+        });
+      });
     }
+
+    peer.close();
+    this.peers.delete(socketId);
   }
 
   getPeers() {
     return Array.from(this.peers.values());
   }
 
-
-  async createWebRtcTransport(socketId: string, forceTcp: boolean = false) {
+  async createWebRtcTransport(socketId: string, forceTcp = false) {
     const {
       listenIps,
       initialAvailableOutgoingBitrate,
-      maxSctpMessageSize
+      maxSctpMessageSize,
     } = config.mediasoup.webRtcTransport;
+
+    const peer = this.getPeer(socketId);
+    if (!peer) throw new Error(`Peer ${socketId} not found`);
 
     const transport = await this.router.createWebRtcTransport({
       listenIps: listenIps as mediasoup.types.TransportListenIp[],
@@ -56,55 +77,55 @@ export class Room {
       enableTcp: true,
       preferUdp: !forceTcp,
       initialAvailableOutgoingBitrate,
-      maxSctpMessageSize
+      maxSctpMessageSize,
     });
 
-    transport.on('dtlsstatechange', (dtlsState) => {
-      if (dtlsState === 'closed') {
-        transport.close();
-      }
+    const closeAndRemove = () => {
+      peer.transports.delete(transport.id);
+      try { transport.close(); } catch {}
+    };
+
+    transport.on('dtlsstatechange', dtlsState => {
+      if (dtlsState === 'closed') closeAndRemove();
     });
 
-    const peer = this.getPeer(socketId);
-    if (peer) {
-      peer.addTransport(transport);
-    }
+    transport.on('icestatechange', (iceState: string) => {
+      if (iceState === 'failed') closeAndRemove();
+    });
+
+    peer.addTransport(transport);
 
     return {
       id: transport.id,
       iceParameters: transport.iceParameters,
       iceCandidates: transport.iceCandidates,
-      dtlsParameters: transport.dtlsParameters
+      dtlsParameters: transport.dtlsParameters,
     };
   }
 
   async connectPeerTransport(socketId: string, transportId: string, dtlsParameters: any) {
     const peer = this.getPeer(socketId);
-    if (!peer) return;
+    if (!peer) throw new Error(`Peer ${socketId} not found`);
 
     const transport = peer.getTransport(transportId);
-    if (!transport) return;
+    if (!transport) throw new Error(`Transport ${transportId} not found`);
 
     await transport.connect({ dtlsParameters });
   }
 
   async produce(socketId: string, transportId: string, rtpParameters: any, kind: any, appData: any = {}) {
     const peer = this.getPeer(socketId);
-    if (!peer) return;
+    if (!peer) throw new Error(`Peer ${socketId} not found`);
 
     const transport = peer.getTransport(transportId);
-    if (!transport) return;
+    if (!transport) throw new Error(`Transport ${transportId} not found`);
 
-    const producer = await transport.produce({
-      kind,
-      rtpParameters,
-      appData
-    });
-
+    const producer = await transport.produce({ kind, rtpParameters, appData });
     peer.addProducer(producer);
 
     producer.on('transportclose', () => {
-      producer.close();
+      peer.producers.delete(producer.id);
+      try { producer.close(); } catch {}
     });
 
     return producer.id;
@@ -112,38 +133,33 @@ export class Room {
 
   async consume(socketId: string, transportId: string, producerId: string, rtpCapabilities: any) {
     const peer = this.getPeer(socketId);
-    if (!peer) return;
+    if (!peer) throw new Error(`Peer ${socketId} not found`);
 
     const transport = peer.getTransport(transportId);
-    if (!transport) return;
+    if (!transport) throw new Error(`Transport ${transportId} not found`);
 
     if (!this.router.canConsume({ producerId, rtpCapabilities })) {
-      throw new Error('cannot consume');
+      throw new Error('Router cannot consume this producer with the given RTP capabilities');
     }
 
-    const consumer = await transport.consume({
-      producerId,
-      rtpCapabilities,
-      paused: true
-    });
-
+    const consumer = await transport.consume({ producerId, rtpCapabilities, paused: true });
     peer.addConsumer(consumer);
 
     consumer.on('transportclose', () => {
-      consumer.close();
+      peer.consumers.delete(consumer.id);
+      try { consumer.close(); } catch {}
     });
 
     consumer.on('producerclose', () => {
-      consumer.close();
       peer.consumers.delete(consumer.id);
+      try { consumer.close(); } catch {}
     });
 
     return {
       id: consumer.id,
       producerId,
       kind: consumer.kind,
-      rtpParameters: consumer.rtpParameters
+      rtpParameters: consumer.rtpParameters,
     };
   }
 }
-

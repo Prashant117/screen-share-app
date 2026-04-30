@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Monitor, Users, Loader2 } from 'lucide-react';
 import { socket, SOCKET_URL } from '../services/socket';
 import { useAppStore } from '../store/useAppStore';
@@ -9,8 +9,17 @@ export function Home() {
   const [roomIdInput, setRoomIdInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const location = useLocation();
   const navigate = useNavigate();
   const { setDisplayName, setRoomId } = useAppStore();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const roomIdFromUrl = params.get('roomId') || params.get('room') || '';
+    if (roomIdFromUrl) {
+      setRoomIdInput(roomIdFromUrl);
+    }
+  }, [location.search]);
 
   const ensureSocketConnected = () =>
     new Promise<void>((resolve, reject) => {
@@ -37,8 +46,12 @@ export function Home() {
 
     ensureSocketConnected()
       .then(() => {
-        let timeout: any;
+        let timeout: ReturnType<typeof setTimeout>;
+        // `done` prevents both the timeout and the ack from executing if they race
+        let done = false;
         const onAck = (response: any) => {
+          if (done) return;
+          done = true;
           clearTimeout(timeout);
           setIsLoading(false);
           if (response?.error) {
@@ -51,6 +64,8 @@ export function Home() {
         };
         socket.emit('createRoom', { displayName: finalName }, onAck);
         timeout = setTimeout(() => {
+          if (done) return;
+          done = true;
           setIsLoading(false);
           setError('Room creation timed out. Please try again.');
         }, 8000);
@@ -107,6 +122,7 @@ export function Home() {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              maxLength={50}
               className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="e.g. Dr. XYZ"
             />
